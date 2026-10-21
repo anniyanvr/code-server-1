@@ -1,262 +1,208 @@
 #!/bin/bash
 # Demyx
 # https://demyx.sh
-set -euo pipefail
+set -eEuo pipefail
+#
+#   Main.
+#
+demyx_config() {
+    demyx_config_include
+    demyx_config_php
+    demyx_config_proxy
+    demyx_config_www
+}
+#
+#   demyx.php
+#
+demyx_config_include() {
+    local DEMYX_CONFIG_INCLUDE=
+    local DEMYX_CONFIG_INCLUDE_ENV="${DEMYX}"/.env
+    local DEMYX_CONFIG_INCLUDE_HOME="${DEMYX_PROTO}://${DEMYX_DOMAIN}"
+    DEMYX_CONFIG_INCLUDE="$(grep "demyx.php" "${DEMYX_WP_CONFIG}" || true)"
 
-# Support for old variables
-[[ -n "${WORDPRESS_DOMAIN:-}" ]] && DEMYX_DOMAIN="$WORDPRESS_DOMAIN"
-[[ -n "${WORDPRESS_PHP_EMERGENCY_RESTART_INTERVAL:-}" ]] && DEMYX_EMERGENCY_RESTART_INTERVAL="$WORDPRESS_PHP_EMERGENCY_RESTART_INTERVAL"
-[[ -n "${WORDPRESS_PHP_EMERGENCY_RESTART_THRESHOLD:-}" ]] && DEMYX_EMERGENCY_RESTART_THRESHOLD="$WORDPRESS_PHP_EMERGENCY_RESTART_THRESHOLD"
-[[ -n "${WORDPRESS_PHP_MAX_EXECUTION_TIME:-}" ]] && DEMYX_MAX_EXECUTION_TIME="$WORDPRESS_PHP_MAX_EXECUTION_TIME"
-[[ -n "${WORDPRESS_PHP_MEMORY:-}" ]] && DEMYX_MEMORY="$WORDPRESS_PHP_MEMORY"
-[[ -n "${WORDPRESS_PHP_OPCACHE:-}" ]] && DEMYX_OPCACHE="$WORDPRESS_PHP_OPCACHE"
-[[ -n "${WORDPRESS_PHP_PM:-}" ]] && DEMYX_PM="$WORDPRESS_PHP_PM"
-[[ -n "${WORDPRESS_PHP_PM_MAX_CHILDREN:-}" ]] && DEMYX_PM_MAX_CHILDREN="$WORDPRESS_PHP_PM_MAX_CHILDREN"
-[[ -n "${WORDPRESS_PHP_PM_MAX_REQUESTS:-}" ]] && DEMYX_PM_MAX_REQUESTS="$WORDPRESS_PHP_PM_MAX_REQUESTS"
-[[ -n "${WORDPRESS_PHP_PM_MAX_SPARE_SERVERS:-}" ]] && DEMYX_PM_MAX_SPARE_SERVERS="$WORDPRESS_PHP_PM_MAX_SPARE_SERVERS"
-[[ -n "${WORDPRESS_PHP_PM_MIN_SPARE_SERVERS:-}" ]] && DEMYX_PM_MIN_SPARE_SERVERS="$WORDPRESS_PHP_PM_MIN_SPARE_SERVERS"
-[[ -n "${WORDPRESS_PHP_PM_PROCESS_IDLE_TIMEOUT:-}" ]] && DEMYX_PM_PROCESS_IDLE_TIMEOUT="$WORDPRESS_PHP_PM_PROCESS_IDLE_TIMEOUT"
-[[ -n "${WORDPRESS_PHP_PM_START_SERVERS:-}" ]] && DEMYX_PM_START_SERVERS="$WORDPRESS_PHP_PM_START_SERVERS"
-[[ -n "${WORDPRESS_PHP_PROCESS_CONTROL_TIMEOUT:-}" ]] && DEMYX_PROCESS_CONTROL_TIMEOUT="$WORDPRESS_PHP_PROCESS_CONTROL_TIMEOUT"
-[[ -n "${WORDPRESS_UPLOAD_LIMIT:-}" ]] && DEMYX_UPLOAD_LIMIT="$WORDPRESS_UPLOAD_LIMIT"
+    if [[ "${DEMYX_BEDROCK}" = true ]]; then
+        [[ -f "${DEMYX_CONFIG_INCLUDE_ENV}" ]] && sed -i "s|WP_HOME=.*|WP_HOME=${DEMYX_CONFIG_INCLUDE_HOME}|g" "${DEMYX_CONFIG_INCLUDE_ENV}"
+        [[ ! -f "${DEMYX}/web/app/mu-plugins/wp-cli-login-server.php" ]] && ln -s "${DEMYX_CONFIG}/wp-cli-login-server.php" "${DEMYX}/web/app/mu-plugins/wp-cli-login-server.php"
+    else
+        if [[ ! -f "${DEMYX}/wp-content/mu-plugins/wp-cli-login-server.php" ]]; then
+            [[ ! -d "${DEMYX}/wp-content/mu-plugins" ]] && mkdir -p "${DEMYX}/wp-content/mu-plugins"
+            ln -s "${DEMYX_CONFIG}/wp-cli-login-server.php" "${DEMYX}/wp-content/mu-plugins"
+        fi
+    fi
 
-# Default variables
-DEMYX_OPCACHE="${DEMYX_OPCACHE:-true}"
+    # Include demyx.php
+    if [[ -z "${DEMYX_CONFIG_INCLUDE}" ]]; then
+        sed -i "s|<?php.*|<?php\n\
+// Demyx\n\
+// https://demyx.sh\n\
+if ( file_exists( getenv( 'DEMYX_CONFIG' ) . '/demyx.php' ) ) {\n\
+    include_once getenv( 'DEMYX_CONFIG' ) . '/demyx.php';\n\
+}\n\
+\n|g" "$DEMYX_WP_CONFIG"
+    fi
 
-# PHP opcache
-if [[ "$DEMYX_OPCACHE" = off || "$DEMYX_OPCACHE" = false ]]; then
-    DEMYX_OPCACHE_ENABLE=0
-    DEMYX_OPCACHE_ENABLE_CLI=0
-fi
+    if [[ -f "${DEMYX_CONFIG}/custom/wordpress/demyx.php" ]]; then
+        ln -sf "${DEMYX_CONFIG}/custom/wordpress/demyx.php" "${DEMYX_CONFIG}/demyx.php"
+    elif [[ ! -f "${DEMYX_CONFIG}/custom/wordpress/demyx.php" ]]; then
+        {
+            echo "<?php
+/**
+Demyx customizations.
 
-# Generate www.conf
-echo "[${DEMYX_DOMAIN:-www}]
-catch_workers_output        = yes
-chdir                       = $DEMYX
-listen                      = 9000
-php_admin_value[error_log]  = ${DEMYX_LOG}/${DEMYX_DOMAIN}.error.log
-pm                          = $DEMYX_PM
-pm.max_children             = $DEMYX_PM_MAX_CHILDREN
-pm.max_requests             = $DEMYX_PM_MAX_REQUESTS
-pm.max_spare_servers        = $DEMYX_PM_MAX_SPARE_SERVERS
-pm.min_spare_servers        = $DEMYX_PM_MIN_SPARE_SERVERS
-pm.process_idle_timeout     = $DEMYX_PM_PROCESS_IDLE_TIMEOUT
-pm.start_servers            = $DEMYX_PM_START_SERVERS
+@package  Demyx
+@version  1.2.0
+@author   Demyx <info@demyx.sh>
+@link     https://demyx.sh
+ */
+ "
 
-[global]
-emergency_restart_interval  = $DEMYX_EMERGENCY_RESTART_INTERVAL
-emergency_restart_threshold = $DEMYX_EMERGENCY_RESTART_THRESHOLD
-process_control_timeout     = $DEMYX_PROCESS_CONTROL_TIMEOUT
-" > "$DEMYX_CONFIG"/www.conf
+        if [[ "${DEMYX_BEDROCK}" = false ]]; then
+            echo "// If we're behind a proxy server and using HTTPS, we need to alert WordPress of that fact.
+// See also http://codex.wordpress.org/Administration_Over_SSL#Using_a_Reverse_Proxy.
+if ( isset( \$_SERVER['HTTP_X_FORWARDED_PROTO'] ) && 'https' === \$_SERVER['HTTP_X_FORWARDED_PROTO'] ) {
+	\$_SERVER['HTTPS'] = 'on';
+}
 
-# Generate docker.conf
-echo "[global]
-error_log = /proc/self/fd/2
+// Define variables.
+\$demyx_proto      = 'https' === getenv( 'DEMYX_PROTO' ) ? 'https' : 'http';
+\$demyx_domain     = getenv( 'DEMYX_DOMAIN' );
+\$demyx_domain_old = getenv( 'WORDPRESS_DOMAIN' );
+\$demyx_url        = null === \$demyx_domain || 'domain.tld' === \$demyx_domain ?
+	\$demyx_proto . '://' . \$demyx_domain_old :
+	\$demyx_proto . '://' . \$demyx_domain;
 
-; https://github.com/docker-library/php/pull/725#issuecomment-443540114
-log_limit = 8192
+// Define URLs based on DEMYX_DOMAIN container variable.
+define( 'WP_HOME', \$demyx_url );
+define( 'WP_SITEURL', \$demyx_url );
 
-[${DEMYX_DOMAIN}]
-; if we send this to /proc/self/fd/1, it never appears
-access.log = /proc/self/fd/2
+// Disable WordPress cron.
+define( 'DISABLE_WP_CRON', true );
+            "
+        fi
 
-clear_env = no
+        echo "// Redis Cache - https://wordpress.org/plugins/redis-cache/
+define( 'WP_REDIS_HOST', '${DEMYX_DB_HOST/db/rd}' );
+define( 'WP_REDIS_PORT', 6379 );
+define( 'WP_REDIS_PREFIX', '${DEMYX_DOMAIN}' );
+define( 'WP_REDIS_DATABASE', 0 );
+define( 'WP_REDIS_TIMEOUT', 1 );
+define( 'WP_REDIS_READ_TIMEOUT', 1 );
 
-; Ensure worker stdout and stderr are sent to the main error log.
-catch_workers_output = yes
-decorate_workers_output = no
-" > "$DEMYX_CONFIG"/docker.conf
+// Disable installation of default themes/plugins when upgrading
+define( 'CORE_UPGRADE_SKIP_NEW_BUNDLED', true );"
 
-# Generate php.ini
-echo "[Assertion]
-zend.assertions = -1
+        # Add CONCATENATE_SCRIPTS only if not using Bedrock to avoid redefinition
+        if [[ "${DEMYX_BEDROCK}" = false ]]; then
+            echo "
+// Mitigate DoS attack CVE with WordPress script concatenation
+define( 'CONCATENATE_SCRIPTS', false );"
+        fi
 
-[CLI Server]
-cli_server.color = On
+        echo "
+        "
 
-[COM]
+        } > "${DEMYX_CONFIG}/demyx.php"
+    fi
+}
+#
+#   demyx.ini
+#
+demyx_config_php() {
+    if [[ -f "${DEMYX_CONFIG}/custom/wordpress/demyx.ini" ]]; then
+        ln -sf "${DEMYX_CONFIG}/custom/wordpress/demyx.ini" "${DEMYX_CONFIG}/demyx.ini"
+    elif [[ ! -f "${DEMYX_CONFIG}/custom/wordpress/demyx.ini" ]]; then
+        # PHP opcache
+        if [[ "${DEMYX_OPCACHE}" = off || "${DEMYX_OPCACHE}" = false ]]; then
+            DEMYX_OPCACHE_ENABLE=0
+            DEMYX_OPCACHE_ENABLE_CLI=0
+        fi
 
+        cat << EOF > "${DEMYX_CONFIG}/demyx.ini"
 [Date]
-date.timezone = $TZ
-
-[Interbase]
-ibase.allow_persistent = 1
-ibase.dateformat = \"%Y-%m-%d\"
-ibase.max_links = -1
-ibase.max_persistent = -1
-ibase.timeformat = \"%H:%M:%S\"
-ibase.timestampformat = \"%Y-%m-%d %H:%M:%S\"
-
-[MySQLi]
-mysqli.allow_persistent = On
-mysqli.default_host =
-mysqli.default_port = 3306
-mysqli.default_pw =
-mysqli.default_socket =
-mysqli.default_user =
-mysqli.max_links = -1
-mysqli.max_persistent = -1
-mysqli.reconnect = Off
-
-[OCI8]
-
-[ODBC]
-odbc.allow_persistent = On
-odbc.check_persistent = On
-odbc.defaultbinmode = 1
-odbc.defaultlrl = 4096
-odbc.max_links = -1
-odbc.max_persistent = -1
+date.timezone                       = ${TZ}
 
 [PHP]
-allow_url_fopen = On
-allow_url_include = Off
-auto_append_file =
-auto_globals_jit = On
-auto_prepend_file =
-default_charset = \"UTF-8\"
-default_mimetype = \"text/html\"
-default_socket_timeout = 60
-disable_classes =
-disable_functions = pcntl_alarm,pcntl_fork,pcntl_waitpid,pcntl_wait,pcntl_wifexited,pcntl_wifstopped,pcntl_wifsignaled,pcntl_wifcontinued,pcntl_wexitstatus,pcntl_wtermsig,pcntl_wstopsig,pcntl_signal,pcntl_signal_get_handler,pcntl_signal_dispatch,pcntl_get_last_error,pcntl_strerror,pcntl_sigprocmask,pcntl_sigwaitinfo,pcntl_sigtimedwait,pcntl_exec,pcntl_getpriority,pcntl_setpriority,pcntl_async_signals,
-display_errors = Off
-display_startup_errors = Off
-doc_root =
-enable_dl = Off
-engine = On
-error_reporting = E_ALL & ~E_DEPRECATED & ~E_STRICT
-expose_php = Off
-file_uploads = On
-html_errors = On
-ignore_repeated_errors = Off
-ignore_repeated_source = Off
-implicit_flush = Off
-log_errors = On
-log_errors_max_len = 1024
-max_execution_time = $DEMYX_MAX_EXECUTION_TIME
-max_file_uploads = 20
-max_input_time = 600
-max_input_vars = 20000
-memory_limit = $DEMYX_MEMORY
-output_buffering = 4096
-post_max_size = $DEMYX_UPLOAD_LIMIT
-precision = 14
-register_argc_argv = Off
-report_memleaks = On
-request_order = \"GP\"
-sendmail_path =
-serialize_precision = -1
-short_open_tag = Off
-unserialize_callback_func =
-upload_max_filesize = $DEMYX_UPLOAD_LIMIT
-upload_tmp_dir = /tmp
-user_dir =
-variables_order = \"GPCS\"
-zend.enable_gc = On
-zlib.output_compression = Off
-
-[Pcre]
-
-[Pdo]
-
-[Pdo_mysql]
-pdo_mysql.default_socket=
-
-[Phar]
-
-[PostgreSQL]
-pgsql.allow_persistent = On
-pgsql.auto_reset_persistent = Off
-pgsql.max_persistent = -1
-pgsql.max_links = -1
-pgsql.ignore_notice = 0
-pgsql.log_notice = 0
-
-[Session]
-session.auto_start = 0
-session.cache_expire = 180
-session.cache_limiter = nocache
-session.cookie_domain =
-session.cookie_httponly =
-session.cookie_lifetime = 0
-session.cookie_path = /
-session.cookie_samesite =
-session.gc_divisor = 1000
-session.gc_maxlifetime = 1440
-session.gc_probability = 0
-session.name = PHPSESSID
-session.referer_check =
-session.save_handler = files
-session.serialize_handler = php
-session.sid_bits_per_character = 5
-session.sid_length = 26
-session.trans_sid_tags = \"a=href,area=href,frame=src,form=\"
-session.use_cookies = 1
-session.use_only_cookies = 1
-session.use_strict_mode = 0
-session.use_trans_sid = 0
-
-[Tidy]
-tidy.clean_output = Off
-
-[XDebug]
-xdebug.client_port = 9001
-xdebug.mode = debug
-xdebug.start_with_request = trigger
-xdebug.trigger_value = 1
-
-[bcmath]
-bcmath.scale = 0
-
-[browscap]
-
-[curl]
-
-[dba]
-
-[exif]
-
-[filter]
-
-[gd]
-
-[iconv]
-
-[intl]
-
-[ldap]
-ldap.max_links = -1
-
-[mail function]
-SMTP = localhost
-mail.add_x_header = On
-smtp_port = 25
-
-[mbstring]
-
-[mysqlnd]
-mysqlnd.collect_memory_statistics = Off
-mysqlnd.collect_statistics = On
+memory_limit                        = ${DEMYX_MEMORY}
+post_max_size                       = ${DEMYX_UPLOAD_LIMIT}
+upload_max_filesize                 = ${DEMYX_UPLOAD_LIMIT}
+max_execution_time                  = ${DEMYX_MAX_EXECUTION_TIME}
 
 [opcache]
-opcache.consistency_checks=0
-opcache.enable=${DEMYX_OPCACHE_ENABLE:-1}
-opcache.enable_cli=${DEMYX_OPCACHE_ENABLE_CLI:-1}
-opcache.interned_strings_buffer=8
-opcache.max_accelerated_files=10000
-opcache.max_wasted_percentage=10
-opcache.memory_consumption=256
-opcache.revalidate_freq=0
-opcache.save_comments=1
-opcache.validate_timestamps=1
+opcache.consistency_checks          = 0
+opcache.enable                      = ${DEMYX_OPCACHE_ENABLE}
+opcache.enable_cli                  = ${DEMYX_OPCACHE_ENABLE_CLI}
+opcache.interned_strings_buffer     = 32
+opcache.max_accelerated_files       = 10000
+opcache.max_wasted_percentage       = 10
+opcache.memory_consumption          = 256
+opcache.revalidate_freq             = 0
+opcache.save_comments               = 1
+opcache.validate_timestamps         = 1
+EOF
+    fi
+}
+#
+#   TEMPORARY
+#   Delete old reverse proxy rules but make a copy of wp-config.php first
+#
+demyx_config_proxy() {
+    local DEMYX_CONFIG_PROXY=
+    DEMYX_CONFIG_PROXY="$(grep "Using_a_Reverse_Proxy" "$DEMYX_WP_CONFIG" || true)"
 
-[openssl]
+    if [[ -n "$DEMYX_CONFIG_PROXY" ]]; then
+        cp "$DEMYX_WP_CONFIG" "$DEMYX"/"$(date +%F-%H-%M-%S)"-wp-config.bak
+        sed -z "s|// If we're behind a .*}||g" "$DEMYX_WP_CONFIG" > /tmp/wp
+        mv /tmp/wp "$DEMYX_WP_CONFIG"
+    fi
+}
+#
+#   www.conf
+#
+demyx_config_www() {
+    if [[ -f "${DEMYX_CONFIG}/custom/wordpress/www.conf" ]]; then
+        ln -sf "${DEMYX_CONFIG}/custom/wordpress/www.conf" "${DEMYX_CONFIG}/www.conf"
+    elif [[ ! -f "${DEMYX_CONFIG}/custom/wordpress/www.conf" ]]; then
+        # Auto calc
+        local DEMYX_CONFIG_WWW_BUFFER=
+        local DEMYX_CONFIG_WWW_MAX_MEMORY=
+        local DEMYX_CONFIG_WWW_RAM=
+        local DEMYX_CONFIG_WWW_MAX_CHILDREN=
+        local DEMYX_CONFIG_WWW_MAX_SPARE_SERVERS
 
-[soap]
-soap.wsdl_cache_dir=\"/tmp\"
-soap.wsdl_cache_enabled=1
-soap.wsdl_cache_limit = 5
-soap.wsdl_cache_ttl=86400
+        DEMYX_CONFIG_WWW_MAX_MEMORY="$(free | grep Mem | awk -F ' ' '{print $2}')"
+        DEMYX_CONFIG_WWW_BUFFER="$(( "${DEMYX_CONFIG_WWW_MAX_MEMORY}" * 10 /100 ))"
+        DEMYX_CONFIG_WWW_RAM="$(( "${DEMYX_CONFIG_WWW_MAX_MEMORY}" - "${DEMYX_CONFIG_WWW_BUFFER}" - "${DEMYX_CONFIG_WWW_BUFFER}" ))"
+        DEMYX_CONFIG_WWW_MAX_CHILDREN="$(( "${DEMYX_CONFIG_WWW_RAM}" / "${DEMYX_PM_AVERAGE}" ))" # Average maybe
+        DEMYX_CONFIG_WWW_START_SERVERS="$(( "${DEMYX_CONFIG_WWW_MAX_CHILDREN}" * 25 / 100 ))"
+        DEMYX_CONFIG_WWW_MIN_SPARE_SERVERS="${DEMYX_CONFIG_WWW_START_SERVERS}"
+        DEMYX_CONFIG_WWW_MAX_SPARE_SERVERS="$(( "${DEMYX_CONFIG_WWW_MAX_CHILDREN}" * 75 / 100 ))"
 
-[sqlite3]
-" > "$DEMYX_CONFIG"/php.ini
+        cat << EOF > "${DEMYX_CONFIG}/www.conf"
+[${DEMYX_DOMAIN}]
+catch_workers_output                = yes
+decorate_workers_output             = no
+chdir                               = ${DEMYX}
+listen                              = 9000
+php_admin_value[error_log]          = ${DEMYX_LOG}/${DEMYX_DOMAIN}.error.log
+pm                                  = dynamic
+pm.max_children                     = ${DEMYX_CONFIG_WWW_MAX_CHILDREN}
+pm.max_requests                     = ${DEMYX_PM_MAX_REQUESTS}
+pm.max_spare_servers                = ${DEMYX_CONFIG_WWW_MAX_SPARE_SERVERS}
+pm.min_spare_servers                = ${DEMYX_CONFIG_WWW_MIN_SPARE_SERVERS}
+pm.start_servers                    = ${DEMYX_CONFIG_WWW_START_SERVERS}
+access.log                          = /proc/self/fd/2
+clear_env                           = no
+
+[global]
+emergency_restart_interval          = ${DEMYX_EMERGENCY_RESTART_INTERVAL}
+emergency_restart_threshold         = ${DEMYX_EMERGENCY_RESTART_THRESHOLD}
+process_control_timeout             = ${DEMYX_PROCESS_CONTROL_TIMEOUT}
+error_log                           = /proc/self/fd/2
+log_limit                           = 8192
+EOF
+    fi
+}
+#
+#   Init.
+#
+demyx_config

@@ -1,0 +1,47 @@
+#!/bin/bash
+# Demyx
+# https://demyx.sh
+set -eEuo pipefail
+#
+#	Main.
+#
+demyx_cron() {
+	# Support for old variable
+    [[ -n "${WORDPRESS_DOMAIN:-}" ]] && export DEMYX_DOMAIN="$WORDPRESS_DOMAIN"
+	local DEMYX_CRON="${1:-}"
+
+	case "$DEMYX_CRON" in
+		wp)
+			demyx_cron_wp
+		;;
+	esac
+}
+#
+#	Events.
+#
+demyx_cron_wp() {
+	local DEMYX_CRON_WP=
+	local DEMYX_CRON_WP_PATH="$DEMYX"
+	local DEMYX_CRON_WP_RANDOM=
+	DEMYX_CRON_WP_RANDOM="$(shuf -i 1-30 -n 1)"
+	[[ "$DEMYX_BEDROCK" = true ]] && DEMYX_CRON_WP_PATH="$DEMYX"/web/wp
+	DEMYX_CRON_WP="$(wp core is-installed --path="$DEMYX_CRON_WP_PATH" 2>&1 || true)"
+
+	# Sleep between 1 to 30 seconds before executing cron
+	#
+	# Reduces server CPU when running over a dozen WP apps
+	# so they don't execute cron at the same time
+	#
+	sleep "$DEMYX_CRON_WP_RANDOM"
+
+	if [[ "$DEMYX_CRON_WP" != *"Error"* ]]; then
+		{
+			echo "[$(date +%F-%T)] ======================================="
+			php -d memory_limit="${DEMYX_MEMORY}" "${DEMYX_CRON_WP_PATH}/wp-cron.php"
+		} | tee -a "$DEMYX_LOG"/"$DEMYX_DOMAIN".cron.log
+	fi
+}
+#
+#	Init.
+#
+demyx_cron "$@"

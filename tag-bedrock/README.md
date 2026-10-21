@@ -1,5 +1,9 @@
 # code-server:bedrock
-
+[![Code Size](https://img.shields.io/github/languages/code-size/demyxsh/code-server?style=flat&color=blue)](https://github.com/demyxsh/code-server)
+[![Repository Size](https://img.shields.io/github/repo-size/demyxsh/code-server?style=flat&color=blue)](https://github.com/demyxsh/code-server)
+[![Watches](https://img.shields.io/github/watchers/demyxsh/code-server?style=flat&color=blue)](https://github.com/demyxsh/code-server)
+[![Stars](https://img.shields.io/github/stars/demyxsh/code-server?style=flat&color=blue)](https://github.com/demyxsh/code-server)
+[![Forks](https://img.shields.io/github/forks/demyxsh/code-server?style=flat&color=blue)](https://github.com/demyxsh/code-server)
 [![Architecture](https://img.shields.io/badge/linux-amd64-important?style=flat&color=blue)](https://hub.docker.com/r/demyx/code-server)
 [![Debian](https://img.shields.io/badge/debian-10.10-informational?style=flat&color=blue)](https://hub.docker.com/r/demyx/code-server)
 [![code-server](https://img.shields.io/badge/code--server-3.12.0-informational?style=flat&color=blue)](https://hub.docker.com/r/demyx/code-server)
@@ -20,47 +24,34 @@ SHELL | zsh
 SHELL THEME | powerlevel10k
 WORDPRESS | https://domain.tld
 CODE-SERVER | https://domain.tld/demyx/cs/
-BROWSER-SYNC | https://domain.tld/demyx/bs/
 PHPMYADMIN | https://domain.tld/demyx/pma/
 
 ## Usage
 
-`code-server:sage` comes with a helper script that wraps yarn commands and also does other things.
+`demyx/code-server:bedrock` comes with a helper script that wraps yarn commands and also does other things.
 
 ```
-demyx-sage <arg>        Sage helper script
+sage <arg>       Sage helper script
 
-           init         Initializes fixes for webpack
-                        Ex: sage -t <theme> init
+     cmd         Run yarn commands
+                 Ex: demyx-sage cmd theme-name yarn-commands
 
-           help         Help menu for sage helper script
-                        Ex: sage help
+     init        Initializes fixes for webpack
+                 Ex: demyx-sage init theme-name
 
-           new          Executes composer create-project, yarn, and sage -t <theme> init
-                        Ex: sage -t <theme> new
+     help        Help menu for sage helper script
+                 Ex: demyx-sage help
 
-           -t           Set the theme
-                        Ex: sage -t <theme> add <package>
+     new         Executes composer create-project, yarn, and sage init theme-name
+                 Ex: demyx-sage new theme-name
 ```
 
 When you run `docker-compose up -d`, it will probably take up to 10 seconds or less on the first time to initialize the container. You can see the output in real time by running `docker logs demyx_sage -f` to see what's installing in that moment.
 
-```
-# docker logs demyx_sage -f
-Creating demyx_cs    ... done
-Success: WordPress installed successfully.
-Success: Rewrite structure set.
-Success: Rewrite rules flushed.
-"[demyx] installing Sage..."
-Success: Switched to 'Sage Starter Theme' theme.
-info  Server listening on http://localhost:8080
-info    - Using custom password for authentication
-info    - Not serving HTTPS
-```
-
 * Configured for remote VPS
 * Ports 80 and 443 must be open when using Traefik
 * TLS/SSL enabled by default
+* To update all code-server extensions, run this command: `demyx-extension` or `demyx-extension --no-prompt`
 
 ```
 # Demyx
@@ -134,7 +125,7 @@ services:
       - DEMYX_DOMAIN=domain.tld
       - DEMYX_LOG=/var/log/demyx
       - DEMYX_RATE_LIMIT=false
-      - DEMYX_UPLOAD_LIMIT=128M
+      - DEMYX_UPLOAD_LIMIT=256M
       - DEMYX_WHITELIST=false
       - DEMYX_WHITELIST_IP=false
       - DEMYX_WHITELIST_TYPE=false
@@ -163,6 +154,7 @@ services:
       - demyx
     restart: unless-stopped
     volumes:
+      - demyx_custom:/etc/demyx/custom
       - demyx_log:/var/log/demyx
       - demyx_wp:/demyx
   demyx_pma:
@@ -243,9 +235,6 @@ services:
       - demyx_db
     environment:
       - DEMYX=/demyx
-      - DEMYX_ADMIN_EMAIL=info@domain.tld
-      - DEMYX_ADMIN_PASSWORD=demyx
-      - DEMYX_ADMIN_USERNAME=demyx
       - DEMYX_BEDROCK=true
       - DEMYX_BEDROCK_MODE=development
       - DEMYX_CODE_AUTH=password
@@ -253,17 +242,26 @@ services:
       - DEMYX_CODE_CONFIG=/home/demyx/.config/code-server
       - DEMYX_CODE_PASSWORD=demyx
       - DEMYX_CONFIG=/etc/demyx
+      - DEMYX_CRON=true
+      - DEMYX_CRON_LOGROTATE_INTERVAL="0 0 * * *"
+      - DEMYX_CRON_WP_INTERVAL="*/5 * * * *"
       - DEMYX_DB_HOST=demyx_db
       - DEMYX_DB_NAME=demyx
       - DEMYX_DB_PASSWORD=demyx
-      - DEMYX_DB_USER=demyx
+      - DEMYX_DB_USERNAME=demyx
       - DEMYX_DOMAIN=domain.tld
       - DEMYX_EMERGENCY_RESTART_INTERVAL=1m
       - DEMYX_EMERGENCY_RESTART_THRESHOLD=5
       - DEMYX_LOG=/var/log/demyx
+      - DEMYX_LOGROTATE=daily
+      - DEMYX_LOGROTATE_INTERVAL=7
+      - DEMYX_LOGROTATE_SIZE=10M
       - DEMYX_MAX_EXECUTION_TIME=300
       - DEMYX_MEMORY=256M
       - DEMYX_OPCACHE=true
+      - DEMYX_OPCACHE_ENABLE=1
+      - DEMYX_OPCACHE_ENABLE_CLI=1
+      - DEMYX_PHP=8.1
       - DEMYX_PM=ondemand
       - DEMYX_PM_MAX_CHILDREN=25
       - DEMYX_PM_MAX_REQUESTS=25000
@@ -273,47 +271,36 @@ services:
       - DEMYX_PM_START_SERVERS=5
       - DEMYX_PROCESS_CONTROL_TIMEOUT=10s
       - DEMYX_PROXY=demyx_nx
-      - DEMYX_SSL=true
-      - DEMYX_UPLOAD_LIMIT=128M
+      - DEMYX_SSL=false
+      - DEMYX_PROTO=http
+      - DEMYX_UPLOAD_LIMIT=256M
+      - DEMYX_WP_CONFIG=/demyx/web/wp-config.php
+      - DEMYX_WP_EMAIL=info@domain.tld
+      - DEMYX_WP_PASSWORD=demyx
+      - DEMYX_WP_USERNAME=demyx
       - TZ=America/Los_Angeles
     hostname: demyx-wp
     image: demyx/code-server:bedrock
     labels:
       - "traefik.enable=true"
-      - "traefik.http.middlewares.demyx-wp-bs-prefix.stripprefix.prefixes=/demyx/bs/"
-      - "traefik.http.middlewares.demyx-wp-hotupdate-js-prefix.stripprefix.prefixes=/demyx/bs/app/themes/[a-z0-9]/dist/[a-z.0-9].hot-update.js"
-      - "traefik.http.middlewares.demyx-wp-hotupdate-json-prefix.stripprefix.prefixes=/demyx/bs/app/themes/[a-z0-9]/dist/[a-z0-9].hot-update.json"
+      - "traefik.http.middlewares.demyx-wp-hotupdate-js-prefix.stripprefix.prefixes=/app.[a-z0-9].hot-update.js"
+      - "traefik.http.middlewares.demyx-wp-hotupdate-json-prefix.stripprefix.prefixes=/app.[a-z0-9].hot-update.json"
       - "traefik.http.middlewares.demyx-wp-prefix.stripprefix.prefixes=/demyx/cs/"
-      - "traefik.http.middlewares.demyx-wp-socket-prefix.stripprefix.prefixes=/demyx/bs/browser-sync/socket.io/"
-      - "traefik.http.middlewares.demyx-wp-webpack-prefix.stripprefix.prefixes=/demyx/bs/__webpack_hmr"
-      - "traefik.http.routers.demyx-wp-bs.entrypoints=https"
-      - "traefik.http.routers.demyx-wp-bs.middlewares=demyx-wp-bs-prefix"
-      - "traefik.http.routers.demyx-wp-bs.priority=99"
-      - "traefik.http.routers.demyx-wp-bs.rule=Host(`domain.tld`) && PathPrefix(`/demyx/bs/`)" # browsersync https://domain.tld/demyx/bs/
-      - "traefik.http.routers.demyx-wp-bs.service=demyx-wp-bs"
-      - "traefik.http.routers.demyx-wp-bs.tls.certresolver=demyx"
       - "traefik.http.routers.demyx-wp-hotupdate-js.entrypoints=https"
       - "traefik.http.routers.demyx-wp-hotupdate-js.middlewares=demyx-wp-hotupdate-js-prefix"
       - "traefik.http.routers.demyx-wp-hotupdate-js.priority=99"
-      - "traefik.http.routers.demyx-wp-hotupdate-js.rule=Host(`domain.tld`) && PathPrefix(`/app/themes/{path:[a-z0-9]+}/dist/{hash:[a-z.0-9]+}.hot-update.js`)"
+      - "traefik.http.routers.demyx-wp-hotupdate-js.rule=Host(`domain.tld`) && PathPrefix(`/app.{hash:[a-z.0-9]+}.hot-update.js`)"
       - "traefik.http.routers.demyx-wp-hotupdate-js.service=demyx-wp-hotupdate-js"
       - "traefik.http.routers.demyx-wp-hotupdate-js.tls.certresolver=demyx"
       - "traefik.http.routers.demyx-wp-hotupdate-json.entrypoints=https"
       - "traefik.http.routers.demyx-wp-hotupdate-json.middlewares=demyx-wp-hotupdate-json-prefix"
       - "traefik.http.routers.demyx-wp-hotupdate-json.priority=99"
-      - "traefik.http.routers.demyx-wp-hotupdate-json.rule=Host(`domain.tld`) && PathPrefix(`/app/themes/{path:[a-z0-9]+}/dist/{hash:[a-z0-9]+}.hot-update.json`)"
+      - "traefik.http.routers.demyx-wp-hotupdate-json.rule=Host(`domain.tld`) && PathPrefix(`/app.{hash:[a-z0-9]+}.hot-update.json`)"
       - "traefik.http.routers.demyx-wp-hotupdate-json.service=demyx-wp-hotupdate-json"
       - "traefik.http.routers.demyx-wp-hotupdate-json.tls.certresolver=demyx"
-      - "traefik.http.routers.demyx-wp-socket.entrypoints=https"
-      - "traefik.http.routers.demyx-wp-socket.middlewares=demyx-wp-socket-prefix"
-      - "traefik.http.routers.demyx-wp-socket.priority=99"
-      - "traefik.http.routers.demyx-wp-socket.rule=Host(`domain.tld`) && PathPrefix(`/browser-sync/socket.io/`)"
-      - "traefik.http.routers.demyx-wp-socket.service=demyx-wp-socket"
-      - "traefik.http.routers.demyx-wp-socket.tls.certresolver=demyx"
       - "traefik.http.routers.demyx-wp-webpack.entrypoints=https"
-      - "traefik.http.routers.demyx-wp-webpack.middlewares=demyx-wp-webpack-prefix"
       - "traefik.http.routers.demyx-wp-webpack.priority=99"
-      - "traefik.http.routers.demyx-wp-webpack.rule=Host(`domain.tld`) && PathPrefix(`/__webpack_hmr`)"
+      - "traefik.http.routers.demyx-wp-webpack.rule=Host(`domain.tld`) && PathPrefix(`/__bud/hmr`)"
       - "traefik.http.routers.demyx-wp-webpack.service=demyx-wp-webpack"
       - "traefik.http.routers.demyx-wp-webpack.tls.certresolver=demyx"
       - "traefik.http.routers.demyx-wp.entrypoints=https"
@@ -322,23 +309,24 @@ services:
       - "traefik.http.routers.demyx-wp.rule=Host(`domain.tld`) && PathPrefix(`/demyx/cs/`)" # code-server https://domain.tld/demyx/cs/
       - "traefik.http.routers.demyx-wp.service=demyx-wp-port"
       - "traefik.http.routers.demyx-wp.tls.certresolver=demyx"
-      - "traefik.http.services.demyx-wp-bs.loadbalancer.server.port=3000"
       - "traefik.http.services.demyx-wp-hotupdate-js.loadbalancer.server.port=3000"
       - "traefik.http.services.demyx-wp-hotupdate-json.loadbalancer.server.port=3000"
       - "traefik.http.services.demyx-wp-port.loadbalancer.server.port=8080"
-      - "traefik.http.services.demyx-wp-socket.loadbalancer.server.port=3000"
       - "traefik.http.services.demyx-wp-webpack.loadbalancer.server.port=3000"
     networks:
       - demyx
     restart: unless-stopped
     volumes:
       - demyx_code:/home/demyx
+      - demyx_custom:/etc/demyx/custom
       - demyx_log:/var/log/demyx
       - demyx_wp:/demyx
 version: "2.4"
 volumes:
   demyx_code:
     name: demyx_code
+  demyx_custom:
+    name: demyx_custom
   demyx_db:
     name: demyx_db
   demyx_log:
@@ -350,13 +338,6 @@ volumes:
 ```
 
 ## Updates & Support
-
-[![Code Size](https://img.shields.io/github/languages/code-size/demyxco/code-server?style=flat&color=blue)](https://github.com/demyxco/code-server)
-[![Repository Size](https://img.shields.io/github/repo-size/demyxco/code-server?style=flat&color=blue)](https://github.com/demyxco/code-server)
-[![Watches](https://img.shields.io/github/watchers/demyxco/code-server?style=flat&color=blue)](https://github.com/demyxco/code-server)
-[![Stars](https://img.shields.io/github/stars/demyxco/code-server?style=flat&color=blue)](https://github.com/demyxco/code-server)
-[![Forks](https://img.shields.io/github/forks/demyxco/code-server?style=flat&color=blue)](https://github.com/demyxco/code-server)
-
 * Auto built weekly on Saturdays (America/Los_Angeles)
 * Rolling release updates
-* For support: [#demyx](https://webchat.freenode.net/?channel=#demyx)
+* For support: [#demyx](https://web.libera.chat/?channel=#demyx)

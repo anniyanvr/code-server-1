@@ -2,13 +2,15 @@ FROM quay.io/vektorlab/ctop as demyx_ctop
 FROM docker as demyx_docker
 FROM golang:buster as demyx_go
 FROM koalaman/shellcheck as demyx_shellcheck
-FROM debian:buster-slim
+FROM debian:stable-slim
 
 LABEL sh.demyx.image        demyx/code-server:go
 LABEL sh.demyx.maintainer   Demyx <info@demyx.sh>
 LABEL sh.demyx.url          https://demyx.sh
-LABEL sh.demyx.github       https://github.com/demyxco
+LABEL sh.demyx.github       https://github.com/demyxsh
 LABEL sh.demyx.registry     https://hub.docker.com/u/demyx
+
+ARG CODE_SERVER_VERSION=v4.121.0
 
 # Set default variables
 ENV DEMYX                   /demyx
@@ -69,7 +71,6 @@ RUN set -ex; \
     \
     # Oh-My-Zsh
     su -c "$(curl -fsSL https://raw.githubusercontent.com/robbyrussell/oh-my-zsh/master/tools/install.sh)" -s /bin/sh demyx; \
-    su -c "git clone --depth=1 https://github.com/romkatv/powerlevel10k.git /home/demyx/.oh-my-zsh/custom/themes/powerlevel10k" -s /bin/sh demyx; \
     su -c "git clone https://github.com/zsh-users/zsh-autosuggestions.git /home/demyx/.oh-my-zsh/custom/plugins/zsh-autosuggestions" -s /bin/sh demyx; \
     su -c "git clone https://github.com/TamCore/autoupdate-oh-my-zsh-plugins.git /home/demyx/.oh-my-zsh/custom/plugins/autoupdate" -s /bin/sh demyx; \
     sed -i 's|source $ZSH/oh-my-zsh.sh|source "$DEMYX_CONFIG"/.demyxrc\nsource $ZSH/oh-my-zsh.sh|g' /home/demyx/.zshrc; \
@@ -87,11 +88,10 @@ COPY --chown=demyx:demyx config "$DEMYX_CONFIG"
 
 # Configure code-server
 RUN set -ex; \
-    # Get code-server
-    CODE_VERSION="$(curl -sL https://api.github.com/repos/cdr/code-server/releases/latest | jq -r .tag_name)"; \
-    CODE_VERSION_NUMBER="$(echo "$CODE_VERSION" | sed 's|v||g')"; \
-    curl -sL https://github.com/cdr/code-server/releases/download/"$CODE_VERSION"/code-server-"$CODE_VERSION_NUMBER"-linux-amd64.tar.gz -o /tmp/code-server-"$CODE_VERSION"-linux-amd64.tar.gz; \
-    tar -xzf /tmp/code-server-"$CODE_VERSION"-linux-amd64.tar.gz -C /tmp; \
+    # Pin version for reproducible CI builds and to avoid GitHub API rate limits.
+    CODE_VERSION_NUMBER="$(echo "$CODE_SERVER_VERSION" | sed 's|^v||')"; \
+    curl -fsSL https://github.com/coder/code-server/releases/download/"$CODE_SERVER_VERSION"/code-server-"$CODE_VERSION_NUMBER"-linux-amd64.tar.gz -o /tmp/code-server-"$CODE_SERVER_VERSION"-linux-amd64.tar.gz; \
+    tar -xzf /tmp/code-server-"$CODE_SERVER_VERSION"-linux-amd64.tar.gz -C /tmp; \
     mv /tmp/code-server-"$CODE_VERSION_NUMBER"-linux-amd64 /usr/local/lib/code-server; \
     \
     # Create code-server directories
@@ -106,30 +106,12 @@ RUN set -ex; \
     \
     # Install default extensions
     code-server --extensions-dir="$DEMYX_CODE_CONFIG"/extensions \
-        --install-extension=equinusocio.vsc-material-theme \
-        --install-extension=pkief.material-icon-theme \
+        --install-extension=catppuccin.catppuccin-vsc \
+        --install-extension=catppuccin.catppuccin-vsc-icons \
+        --install-extension=shevaua.phpcs \
+        --install-extension=felixfbecker.php-debug \
         --install-extension=remisa.shellman \
         --install-extension=timonwong.shellcheck; \
-    \
-    # Tag specifc extensions
-    code-server --extensions-dir="$DEMYX_CODE_CONFIG"/extensions \
-        --install-extension=golang.go; \
-    \
-    # Custom fonts
-    cd /usr/local/lib/code-server/src/browser/pages; \
-    curl -O "https://demyx.sh/fonts/{meslolgs-nf-regular.woff,meslolgs-nf-bold.woff,meslolgs-nf-italic.woff,meslolgs-nf-bold-italic.woff}"; \
-    \
-    sed -i "s|</head>|\
-    <style> \n\
-        @font-face { \n\
-        font-family: 'MesloLGS NF'; \n\
-        font-style: normal; \n\
-        src: url('_static/src/browser/pages/meslolgs-nf-regular.woff') format('woff'), \n\
-        url('_static/src/browser/pages/meslolgs-nf-bold.woff') format('woff'), \n\
-        url('_static/src/browser/pages/meslolgs-nf-italic.woff') format('woff'), \n\
-        url('_static/src/browser/pages/meslolgs-nf-bold-italic.woff') format('woff'); \n\
-    } \n\
-    \n\</style></head>|g" /usr/local/lib/code-server/vendor/modules/code-oss-dev/out/vs/code/browser/workbench/workbench.html; \
     \
     # Finalize code-server
     chown -R demyx:demyx "$DEMYX_CODE_CONFIG"; \

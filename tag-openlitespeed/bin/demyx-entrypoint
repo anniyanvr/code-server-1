@@ -1,99 +1,128 @@
 #!/bin/bash
 # Demyx
 # https://demyx.sh
-set -euo pipefail
+set -eEuo pipefail
+#
+#   Main.
+#
+demyx_entrypoint() {
+    # Install WordPress
+    demyx-install
 
-# Support for old password variable
-[[ -n "${PASSWORD:-}" ]] && DEMYX_CODE_PASSWORD="$PASSWORD"
+    # Generate config
+    sudo -E demyx-config
 
-# Create new code-server config directory
-if [[ ! -d /home/demyx/.config ]]; then
-    mkdir -p /home/demyx/.config
-    cp -r "$DEMYX_CONFIG"/code-server /home/demyx/.config
+    # Start crond
+    sudo -E demyx-sudo
+
+    # OpenLiteSpeed admin
+    sudo -E demyx-admin
+
+    # OpenLiteSpeed htpasswd
+    sudo -E demyx-htpasswd
+
+    if [[ -n "$(pgrep lsphp || true)" ]]; then
+        sudo -E demyx-lsws restart
+    else
+        # Start OLS
+        sudo -E demyx-lsws
+    fi
+
+    # Create new code-server config directory
+    if [[ ! -d /home/demyx/.config ]]; then
+        mkdir -p /home/demyx/.config
+        cp -r "$DEMYX_CONFIG"/code-server /home/demyx/.config
+    fi
+
+    # Migrate old configs to new directory
+    if [[ -d /home/demyx/.code/data ]]; then
+        mkdir -p "$DEMYX_CODE_CONFIG"/data
+        cp -r /home/demyx/.code/data/. "$DEMYX_CODE_CONFIG"
+        rm -rf /home/demyx/.code/data
+    fi
+
+    if [[ -d /home/demyx/.code/extensions ]]; then
+        mkdir -p "$DEMYX_CODE_CONFIG"/extensions
+        cp -r /home/demyx/.code/extensions/. "$DEMYX_CODE_CONFIG"
+        rm -rf /home/demyx/.code/extensions
+    fi
+
+    # Update oh-my-zsh
+    if [[ -f /home/demyx/.zshrc ]]; then
+        DEMYX_ZSHRC_CHECK="$(cat < /home/demyx/.zshrc)"
+        if [[ "$DEMYX_ZSHRC_CHECK" != *"source \"\$DEMYX_CONFIG\""* ]]; then
+            sed -i "s|source \$ZSH/oh-my-zsh.sh|source \"\$DEMYX_CONFIG\"/.demyxrc\nsource \$ZSH/oh-my-zsh.sh|g" /home/demyx/.zshrc
+        fi
+
+        # Remove export GPG_TTY
+        if [[ "$DEMYX_ZSHRC_CHECK" == *"export GPG_TTY"* ]]; then
+            sed -i "/export GPG_TTY/d" /home/demyx/.zshrc
+        fi
+    fi
+
+    # Remove autoupdate
+    if [[ -d /home/demyx/.oh-my-zsh/plugins/autoupdate ]]; then
+        rm -rf /home/demyx/.oh-my-zsh/plugins/autoupdate
+    fi
+    # Double check zsh-autosuggestions
+    if [[ ! -d /home/demyx/.oh-my-zsh/custom/plugins/zsh-autosuggestions ]]; then
+        git clone https://github.com/zsh-users/zsh-autosuggestions.git /home/demyx/.oh-my-zsh/custom/plugins/zsh-autosuggestions
+    fi
+
+    # Remove autoupdate
+    if [[ -d /home/demyx/.oh-my-zsh/plugins/autoupdate ]]; then
+        rm -rf /home/demyx/.oh-my-zsh/plugins/autoupdate
+    fi
+    # Double check autoupdate
+    if [[ ! -d /home/demyx/.oh-my-zsh/custom/plugins/autoupdate ]]; then
+        git clone https://github.com/TamCore/autoupdate-oh-my-zsh-plugins.git /home/demyx/.oh-my-zsh/custom/plugins/autoupdate
+    fi
+
+    # Configure xdebug
+    if [[ ! -d "$DEMYX"/.vscode ]]; then
+        install -d -m 0755 -o demyx -g demyx "$DEMYX"/.vscode
+        cp "$DEMYX_CONFIG"/launch.json "$DEMYX"/.vscode
+    fi
+
+    # Check for wp-cli login package
+    if [[ ! -d "$HOME"/.wp-cli/packages/vendor/aaemnnosttv ]]; then
+        wp package install aaemnnosttv/wp-cli-login-command &
+    fi
+
+    # TEMPORARY
+    composer global require --dev wp-coding-standards/wpcs:"^3.0" &
+    
+    # Remove equinusocio themes
+    DEMYX_ENTRYPOINT_THEME="$(find "${DEMYX_CODE_CONFIG}"/extensions -name "equinusocio*")"
+    if [[ -n "${DEMYX_ENTRYPOINT_THEME}" ]]; then
+        rm -rf "${DEMYX_CODE_CONFIG}"/extensions/equinusocio*
+    fi
+    
+    # Install Catppuccin theme if not present
+    DEMYX_ENTRYPOINT_THEME="$(find "${DEMYX_CODE_CONFIG}"/extensions -type d -maxdepth 1)"
+    if [[ "${DEMYX_ENTRYPOINT_THEME}" != *"catppuccin"* ]]; then
+        code-server --extensions-dir="$DEMYX_CODE_CONFIG"/extensions \
+            --install-extension=catppuccin.catppuccin-vsc \
+            --install-extension=catppuccin.catppuccin-vsc-icons
+    fi
+
+    # Generate code-server yaml
+    echo "auth: \"$DEMYX_CODE_AUTH\"
+    bind-addr: \"$DEMYX_CODE_BIND_ADDR\"
+    cert: false
+    disable-telemetry: true
+    extensions-dir: \"${DEMYX_CODE_CONFIG}/extensions\"
+    password: \"$DEMYX_CODE_PASSWORD\"
+    user-data-dir: \"${DEMYX_CODE_CONFIG}/data\"" | sed 's|    ||g' > "$DEMYX_CODE_CONFIG"/config.yaml
+}
+#
+#   Init.
+#
+demyx_entrypoint
+#
+#   Exec.
+#
+# shellcheck disable=SC2009
+if [[ "$(ps -o cmd fp 1)" != *"/usr/local/lib/code-server"* ]]; then
+    exec "$@"
 fi
-
-# Migrate old configs to new directory
-[[ -d /home/demyx/.code/data ]] && mv /home/demyx/.code/data "$DEMYX_CODE_CONFIG"
-[[ -d /home/demyx/.code/extensions ]] && mv /home/demyx/.code/extensions "$DEMYX_CODE_CONFIG"
-
-# Update oh-my-zsh
-DEMYX_ZSHRC_CHECK="$(cat < /home/demyx/.zshrc)"
-if [[ "$DEMYX_ZSHRC_CHECK" != *"source \"\$DEMYX_CONFIG\""* ]]; then
-    sed -i "s|source \$ZSH/oh-my-zsh.sh|source \"\$DEMYX_CONFIG\"/.demyxrc\nsource \$ZSH/oh-my-zsh.sh|g" /home/demyx/.zshrc
-fi
-
-# Remove export GPG_TTY
-if [[ "$DEMYX_ZSHRC_CHECK" == *"export GPG_TTY"* ]]; then
-    sed -i "/export GPG_TTY/d" /home/demyx/.zshrc
-fi
-
-# Move zsh-autosuggestions
-if [[ -d /home/demyx/.oh-my-zsh/plugins/zsh-autosuggestions ]]; then
-    mv /home/demyx/.oh-my-zsh/plugins/zsh-autosuggestions /home/demyx/.oh-my-zsh/custom/plugins
-fi
-# Double check zsh-autosuggestions
-if [[ ! -d /home/demyx/.oh-my-zsh/custom/plugins/zsh-autosuggestions ]]; then
-    git clone https://github.com/zsh-users/zsh-autosuggestions.git /home/demyx/.oh-my-zsh/custom/plugins/zsh-autosuggestions
-fi
-
-# Move autoupdate
-if [[ -d /home/demyx/.oh-my-zsh/plugins/autoupdate ]]; then
-    mv /home/demyx/.oh-my-zsh/plugins/autoupdate /home/demyx/.oh-my-zsh/custom/plugins
-fi
-# Double check autoupdate
-if [[ ! -d /home/demyx/.oh-my-zsh/custom/plugins/autoupdate ]]; then
-    git clone https://github.com/TamCore/autoupdate-oh-my-zsh-plugins.git /home/demyx/.oh-my-zsh/custom/plugins/autoupdate
-fi
-
-# Double check powerlevel10k theme
-if [[ ! -d /home/demyx/.oh-my-zsh/custom/themes/powerlevel10k ]]; then
-    git clone --depth=1 https://github.com/romkatv/powerlevel10k.git /home/demyx/.oh-my-zsh/custom/themes/powerlevel10k
-fi
-
-# Check for font-family
-DEMYX_SETTINGS_CHECK="$(cat < "$DEMYX_CODE_CONFIG"/data/User/settings.json)"
-if [[ "$DEMYX_SETTINGS_CHECK" != *"MesloLGS NF"* ]]; then
-    sed -i "s|\"editor.quickSuggestions\": true,|\
-    \"editor.fontFamily\": \"'MesloLGS NF', Menlo, Monaco, 'Courier New', monospace\",\n\
-    \"editor.quickSuggestions\": true,|g" "$DEMYX_CODE_CONFIG"/data/User/settings.json
-fi
-
-# Generate config
-sudo -E demyx-config
-
-# Auto install WordPress if it's not installed already
-demyx-install
-
-# Install demyx helper plugin
-[[ ! -d "$DEMYX"/wp-content/mu-plugins ]] && mkdir -p "$DEMYX"/wp-content/mu-plugins
-cp "$DEMYX_CONFIG"/bs.php "$DEMYX"/wp-content/mu-plugins
-
-# Configure xdebug
-if [[ ! -d "$DEMYX"/.vscode ]]; then
-    install -d -m 0755 -o demyx -g demyx "$DEMYX"/.vscode
-    cp "$DEMYX_CONFIG"/launch.json "$DEMYX"/.vscode
-fi
-
-# Set wp-config.php to debug mode
-sed -i "s|'WP_DEBUG', false|'WP_DEBUG', true|g" "$DEMYX"/wp-config.php
-
-# OpenLiteSpeed admin
-sudo -E demyx-admin
-
-# OpenLiteSpeed htpasswd
-sudo -E demyx-htpasswd
-
-# Start OLS
-sudo -E demyx-lsws
-
-# Generate code-server yaml
-echo "auth: $DEMYX_CODE_AUTH
-bind-addr: $DEMYX_CODE_BIND_ADDR
-cert: false
-disable-telemetry: true
-extensions-dir: ${DEMYX_CODE_CONFIG}/extensions
-password: $DEMYX_CODE_PASSWORD
-user-data-dir: ${DEMYX_CODE_CONFIG}/data" > "$DEMYX_CODE_CONFIG"/config.yaml
-
-# Start code-server
-code-server "$DEMYX"

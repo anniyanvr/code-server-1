@@ -1,64 +1,80 @@
 FROM koalaman/shellcheck as demyx_shellcheck
-FROM php:7-fpm-buster
+FROM php:8.3.36-fpm-bookworm
 
 LABEL sh.demyx.image                    demyx/code-server:wp
 LABEL sh.demyx.maintainer               Demyx <info@demyx.sh>
 LABEL sh.demyx.url                      https://demyx.sh
-LABEL sh.demyx.github                   https://github.com/demyxco
+LABEL sh.demyx.github                   https://github.com/demyxsh
 LABEL sh.demyx.registry                 https://hub.docker.com/u/demyx
+
+ARG CODE_SERVER_VERSION=v4.121.0
 
 # Set default variables
 ENV DEMYX                               /demyx
-ENV DEMYX_ADMIN_EMAIL                   info@localhost
-ENV DEMYX_ADMIN_PASSWORD                demyx
-ENV DEMYX_ADMIN_USERNAME                demyx
+ENV DEMYX_BEDROCK                       false
 ENV DEMYX_CODE_AUTH                     password
 ENV DEMYX_CODE_BIND_ADDR                0.0.0.0:8080
 ENV DEMYX_CODE_CONFIG                   /home/demyx/.config/code-server
 ENV DEMYX_CODE_PASSWORD                 demyx
 ENV DEMYX_CONFIG                        /etc/demyx
+ENV DEMYX_CRON                          true
+ENV DEMYX_CRON_LOGROTATE_INTERVAL       "0 0 * * *"
+ENV DEMYX_CRON_WP_INTERVAL              "*/5 * * * *"
 ENV DEMYX_DB_HOST                       localhost
 ENV DEMYX_DB_NAME                       demyx
 ENV DEMYX_DB_PASSWORD                   demyx
-ENV DEMYX_DB_USER                       demyx
+ENV DEMYX_DB_USERNAME                   demyx
 ENV DEMYX_DOMAIN                        localhost
 ENV DEMYX_EMERGENCY_RESTART_INTERVAL    1m
 ENV DEMYX_EMERGENCY_RESTART_THRESHOLD   5
 ENV DEMYX_LOG                           /var/log/demyx
+ENV DEMYX_LOGROTATE                     daily
+ENV DEMYX_LOGROTATE_INTERVAL            7
+ENV DEMYX_LOGROTATE_SIZE                10M
 ENV DEMYX_MAX_EXECUTION_TIME            300
 ENV DEMYX_MEMORY                        256M
 ENV DEMYX_OPCACHE                       true
-ENV DEMYX_PM                            ondemand
-ENV DEMYX_PM_MAX_CHILDREN               25
-ENV DEMYX_PM_MAX_REQUESTS               25000
-ENV DEMYX_PM_MAX_SPARE_SERVERS          20
-ENV DEMYX_PM_MIN_SPARE_SERVERS          5
-ENV DEMYX_PM_PROCESS_IDLE_TIMEOUT       3s
-ENV DEMYX_PM_START_SERVERS              5
+ENV DEMYX_OPCACHE_ENABLE                1
+ENV DEMYX_OPCACHE_ENABLE_CLI            1
+ENV DEMYX_PHP                           8.2
+ENV DEMYX_PM_AVERAGE                    100000
+ENV DEMYX_PM_MAX_REQUESTS               5000
 ENV DEMYX_PROCESS_CONTROL_TIMEOUT       10s
-ENV DEMYX_UPLOAD_LIMIT                  128M
+ENV DEMYX_PROTO                         http
+ENV DEMYX_UPLOAD_LIMIT                  256M
 ENV DEMYX_WP_CONFIG                     "${DEMYX}/wp-config.php"
+ENV DEMYX_WP_EMAIL                      info@domain.tld
+ENV DEMYX_WP_PASSWORD                   demyx
+ENV DEMYX_WP_USERNAME                   demyx
 ENV TERM                                xterm-256color
 ENV TZ                                  America/Los_Angeles
-# Support for old variables
-ENV CODE_ROOT                           "$DEMYX"
-ENV CODE_CONFIG                         "$DEMYX_CONFIG"
-ENV CODE_LOG                            "$DEMYX_LOG"
+
+RUN php -r 'if (PHP_MAJOR_VERSION !== 8 || PHP_MINOR_VERSION !== 3 || version_compare(PHP_VERSION, "8.3.36", "<")) { fwrite(STDERR, "PHP 8.3.36 or newer is required\n"); exit(1); }'
 
 # Packages
 RUN set -ex; \
     apt-get update && apt-get install -y --no-install-recommends \
-        bash \
+        build-essential \
         bsdmainutils \
         ca-certificates \
+        cron \
         curl \
+        default-mysql-client \
         dnsutils \
+        ed \
         git \
         gnupg \
         htop \
         iputils-ping \
         jq \
         less \
+        libpng-dev \
+        libssh2-1-dev \
+        libssh2-1 \
+        libzip-dev \
+        libmagickwand-dev \
+        libmagickcore-dev \
+        logrotate \
         nano \
         net-tools \
         openssh-client \
@@ -68,23 +84,45 @@ RUN set -ex; \
         unzip \
         util-linux \
         wget \
-        zsh; \
-    \
-    # PHP extensions
-    curl -sL https://raw.githubusercontent.com/mlocati/docker-php-extension-installer/master/install-php-extensions -o /usr/local/bin/install-php-extensions; \
-    chmod uga+x /usr/local/bin/install-php-extensions; \
-    sync; \
-    install-php-extensions \
+        zlib1g-dev \
+        zsh
+
+# PHP extensions
+RUN set -ex; \
+    docker-php-ext-install \
         exif \
         gd \
-        imagick \
         mysqli \
         opcache \
         pdo_mysql \
-        ssh2 \
         sockets \
-        xdebug \
         zip
+
+# Enable Xdebug before PHPIZE_DEPS cleanup removes readelf.
+RUN set -ex; \
+    pecl install ssh2 xdebug && \
+    docker-php-ext-enable xdebug ssh2
+
+# Temporary imagick fix for imagick
+ARG IMAGICK_PHP83_FIX_COMMIT=9df92616f577e38625b96b7b903582a46c064739
+RUN apt-get -q update && \
+    apt-get -yq upgrade && \
+    export PHP_DEV_DEPS='libmagickwand-dev' && \
+    apt-get -yq install --no-install-recommends libmagickwand-6.q16-6 $PHP_DEV_DEPS && \
+    \
+    # Install Imagick from specific archive (PR's #616 code)
+    curl -L "https://github.com/remicollet/imagick/archive/${IMAGICK_PHP83_FIX_COMMIT}.zip" -o /tmp/imagick-issue-php83.zip && \
+    unzip /tmp/imagick-issue-php83.zip -d /tmp && \
+    pecl install "/tmp/imagick-${IMAGICK_PHP83_FIX_COMMIT}/package.xml" && \
+    \
+    apt-get purge -y $PHP_DEV_DEPS $PHPIZE_DEPS && \
+    apt-get autoremove -y --purge && \
+    apt-get clean all && \
+    rm -Rf /tmp/* && \
+    echo "extension=imagick.so" > /usr/local/etc/php/conf.d/ext-imagick.ini
+
+COPY bin/demyx-php-security /usr/local/bin/demyx-php-security
+RUN chmod +x /usr/local/bin/demyx-php-security && /usr/local/bin/demyx-php-security wp
 
 # Configure Demyx
 RUN set -ex; \
@@ -102,7 +140,6 @@ RUN set -ex; \
     \
     # Oh-My-Zsh
     su -c "$(curl -fsSL https://raw.githubusercontent.com/robbyrussell/oh-my-zsh/master/tools/install.sh)" -s /bin/sh demyx; \
-    su -c "git clone --depth=1 https://github.com/romkatv/powerlevel10k.git /home/demyx/.oh-my-zsh/custom/themes/powerlevel10k" -s /bin/sh demyx; \
     su -c "git clone https://github.com/zsh-users/zsh-autosuggestions.git /home/demyx/.oh-my-zsh/custom/plugins/zsh-autosuggestions" -s /bin/sh demyx; \
     su -c "git clone https://github.com/TamCore/autoupdate-oh-my-zsh-plugins.git /home/demyx/.oh-my-zsh/custom/plugins/autoupdate" -s /bin/sh demyx; \
     sed -i 's|source $ZSH/oh-my-zsh.sh|source "$DEMYX_CONFIG"/.demyxrc\nsource $ZSH/oh-my-zsh.sh|g' /home/demyx/.zshrc; \
@@ -117,41 +154,36 @@ RUN set -ex; \
 
 # PHP CodeSniffer & WPCS
 RUN set -ex; \
-    su -c "mkdir \"$DEMYX_CONFIG\"/phpcs && cd \"$DEMYX_CONFIG\"/phpcs; \
-    composer require \"squizlabs/php_codesniffer=*\"; \
-    cd .. && git clone -b master https://github.com/WordPress/WordPress-Coding-Standards.git wpcs; \
-    \"$DEMYX_CONFIG\"/phpcs/vendor/bin/phpcs --config-set installed_paths ${DEMYX_CONFIG}/wpcs" -s /bin/sh demyx; \
-    ln -s "$DEMYX_CONFIG"/phpcs/vendor/bin/phpcs /usr/local/bin/phpcs
+    su -c "composer global config allow-plugins.dealerdirect/phpcodesniffer-composer-installer true; \
+    composer global require --dev wp-coding-standards/wpcs:\"^3.0\"; \
+    /home/demyx/.composer/vendor/bin/phpcs --config-set installed_paths /home/demyx/.composer/vendor/wp-coding-standards/wpcs --standard=WordPress" -s /bin/sh demyx; \
+    ln -s /home/demyx/.composer/vendor/bin/phpcs /usr/local/bin/phpcs
 
 # WordPress
 RUN set -ex; \
-    su -c "wget https://wordpress.org/latest.tar.gz -qO /tmp/latest.tar.gz; \
-        \
-        tar -xzf /tmp/latest.tar.gz -C /tmp; \
-        \
-        mv /tmp/wordpress/wp-config-sample.php /tmp/wordpress/wp-config.php; \
-        \
-        cp -r /tmp/wordpress/* ${DEMYX}; \
-        \
-        tar -czf ${DEMYX_CONFIG}/wordpress.tgz -C /tmp/wordpress ." -s /bin/sh demyx
-
-# wp-cli
-RUN set -ex; \
-    curl -sL https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar -o /usr/local/bin/wp; \
-    chmod +x /usr/local/bin/wp
+    \
+    # Install wp-cli with memory-aware wrapper
+    wget https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar -qO /home/demyx/wp; \
+    chmod +x /home/demyx/wp; \
+    \
+    # Create memory-aware wp wrapper script
+    echo "#!/bin/bash\nexec php -d memory_limit=\"\${DEMYX_MEMORY}\" /home/demyx/wp \"\$@\"" > /usr/local/bin/wp; \
+    chmod +x /usr/local/bin/wp; \
+    \
+    su -c "wp package install aaemnnosttv/wp-cli-login-command; \
+        wget https://raw.githubusercontent.com/aaemnnosttv/wp-cli-login-command/master/plugin/wp-cli-login-server.php -qO ${DEMYX_CONFIG}/wp-cli-login-server.php" -s /bin/sh demyx
 
 # Imports
 COPY --from=demyx_shellcheck /bin/shellcheck /usr/local/bin/shellcheck
-COPY --chown=root:root bin /usr/local/bin
+COPY bin /usr/local/bin
 COPY --chown=demyx:demyx config "$DEMYX_CONFIG"
 
 # Configure code-server
 RUN set -ex; \
-    # Get code-server
-    CODE_VERSION="$(curl -sL https://api.github.com/repos/cdr/code-server/releases/latest | jq -r .tag_name)"; \
-    CODE_VERSION_NUMBER="$(echo "$CODE_VERSION" | sed 's|v||g')"; \
-    curl -sL https://github.com/cdr/code-server/releases/download/"$CODE_VERSION"/code-server-"$CODE_VERSION_NUMBER"-linux-amd64.tar.gz -o /tmp/code-server-"$CODE_VERSION"-linux-amd64.tar.gz; \
-    tar -xzf /tmp/code-server-"$CODE_VERSION"-linux-amd64.tar.gz -C /tmp; \
+    # Pin version for reproducible CI builds and to avoid GitHub API rate limits.
+    CODE_VERSION_NUMBER="$(echo "$CODE_SERVER_VERSION" | sed 's|^v||')"; \
+    curl -fsSL https://github.com/coder/code-server/releases/download/"$CODE_SERVER_VERSION"/code-server-"$CODE_VERSION_NUMBER"-linux-amd64.tar.gz -o /tmp/code-server-"$CODE_SERVER_VERSION"-linux-amd64.tar.gz; \
+    tar -xzf /tmp/code-server-"$CODE_SERVER_VERSION"-linux-amd64.tar.gz -C /tmp; \
     mv /tmp/code-server-"$CODE_VERSION_NUMBER"-linux-amd64 /usr/local/lib/code-server; \
     \
     # Create code-server directories
@@ -166,31 +198,12 @@ RUN set -ex; \
     \
     # Install default extensions
     code-server --extensions-dir="$DEMYX_CODE_CONFIG"/extensions \
-        --install-extension=equinusocio.vsc-material-theme \
-        --install-extension=pkief.material-icon-theme \
+        --install-extension=catppuccin.catppuccin-vsc \
+        --install-extension=catppuccin.catppuccin-vsc-icons \
+        --install-extension=shevaua.phpcs \
+        --install-extension=felixfbecker.php-debug \
         --install-extension=remisa.shellman \
         --install-extension=timonwong.shellcheck; \
-    \
-    # Tag specifc extensions
-    code-server --extensions-dir="$DEMYX_CODE_CONFIG"/extensions \
-        --install-extension="$DEMYX_CONFIG"/shevaua.phpcs-1.0.8.vsix \
-        --install-extension=felixfbecker.php-debug; \
-    \
-    # Custom fonts
-    cd /usr/local/lib/code-server/src/browser/pages; \
-    curl -O "https://demyx.sh/fonts/{meslolgs-nf-regular.woff,meslolgs-nf-bold.woff,meslolgs-nf-italic.woff,meslolgs-nf-bold-italic.woff}"; \
-    \
-    sed -i "s|</head>|\
-    <style> \n\
-        @font-face { \n\
-        font-family: 'MesloLGS NF'; \n\
-        font-style: normal; \n\
-        src: url('_static/src/browser/pages/meslolgs-nf-regular.woff') format('woff'), \n\
-        url('_static/src/browser/pages/meslolgs-nf-bold.woff') format('woff'), \n\
-        url('_static/src/browser/pages/meslolgs-nf-italic.woff') format('woff'), \n\
-        url('_static/src/browser/pages/meslolgs-nf-bold-italic.woff') format('woff'); \n\
-    } \n\
-    \n\</style></head>|g" /usr/local/lib/code-server/vendor/modules/code-oss-dev/out/vs/code/browser/workbench/workbench.html; \
     \
     # Finalize code-server
     chown -R demyx:demyx "$DEMYX_CODE_CONFIG"; \
@@ -199,13 +212,17 @@ RUN set -ex; \
 
 # Finalize
 RUN set -ex; \
+    \
     # Remove php-fpm configs
     rm -f /usr/local/etc/php-fpm.d/*; \
     \
     # Use our php-fpm configs
-    ln -s "$DEMYX_CONFIG"/php.ini /usr/local/etc/php/php.ini; \
-    ln -s "$DEMYX_CONFIG"/www.conf /usr/local/etc/php-fpm.d/www.conf; \
-    ln -s "$DEMYX_CONFIG"/docker.conf /usr/local/etc/php-fpm.d/docker.conf; \
+    ln -sf "${DEMYX_CONFIG}"/demyx.ini /usr/local/etc/php/php.ini; \
+    ln -sf "${DEMYX_CONFIG}"/www.conf /usr/local/etc/php-fpm.d/www.conf; \
+    echo "[XDebug]\nzend_extension = xdebug.so\nxdebug.client_port = 9001\nxdebug.mode = debug\nxdebug.start_with_request = trigger\nxdebug.trigger_value = 1" > /usr/local/etc/php/conf.d/docker-php-ext-xdebug.ini; \
+    \
+    # Configure sudo
+    echo "demyx ALL=(ALL) NOPASSWD:SETENV: /usr/local/bin/demyx-sudo" > /etc/sudoers.d/demyx; \
     \
     # Set ownership
     chown -R root:root /usr/local/bin; \
@@ -215,9 +232,7 @@ RUN set -ex; \
     rm -rf /tmp/*
 
 EXPOSE 8080 9000 9001
-
 WORKDIR "$DEMYX"
-
 USER demyx
-
 ENTRYPOINT ["demyx-entrypoint"]
+CMD [ "code-server", "/demyx" ]

@@ -1,9 +1,17 @@
 #!/bin/bash
 # Demyx
 # https://demyx.sh
-set -euo pipefail
+set -eEuo pipefail
+#
+#   Main.
+#
+demyx_lsws() {
+    # Set the default command to start
+    local DEMYX_LSWS_COMMAND="${1:-start}"
 
-# Set the default command to start
-DEMYX_LSWS_COMMAND="${1:-start}"
-
-sudo /usr/local/lsws/bin/lswsctrl "$DEMYX_LSWS_COMMAND"
+    /usr/local/lsws/bin/lswsctrl "$DEMYX_LSWS_COMMAND"
+}
+#
+#   Init.
+#
+demyx_lsws "$@"
